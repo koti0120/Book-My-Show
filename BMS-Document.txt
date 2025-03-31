@@ -1,0 +1,576 @@
+1.  create a instance n.virgenia region lo
+first we take t2 large server and take ubuntu server nd 28gb volume.
+take default sg and add SMTP port for mail notification and add 3000-10000 tcp port for jenkins, grafana, prometheus and add HTTP,HTTPs,SMTPS  and 30000-32767 (for use node port use some random port numbers )ports as well
+==================================
+step: 2.1 Jenkins setup
+=================================
+log in ec2 server
+sudo apt upadate
+create a file vi Jenkins.sh
+#!/bin/bash
+
+# Install OpenJDK 17 JRE Headless
+sudo apt install openjdk-17-jre-headless -y
+
+# Download Jenkins GPG key
+sudo wget -O /usr/share/keyrings/jenkins-keyring.asc \
+  https://pkg.jenkins.io/debian-stable/jenkins.io-2023.key
+
+# Add Jenkins repository to package manager sources
+echo deb [signed-by=/usr/share/keyrings/jenkins-keyring.asc] \
+  https://pkg.jenkins.io/debian-stable binary/ | sudo tee \
+  /etc/apt/sources.list.d/jenkins.list > /dev/null
+
+# Update package manager repositories
+sudo apt-get update
+
+# Install Jenkins
+sudo apt-get install jenkins -y
+>>>>>>>>>>>>>>>>>>
+sudo chmod +x jenkins.sh
+./jenkins.sh
+check 1. java --version
+      2. sudo systemctl status jenkins
+Access Jenkins and setup Jenkins
+
+=========================================================
+step:2.2 docker setup
+=====================================================
+create a file vi docker.sh
+#!/bin/bash
+
+# Update package manager repositories
+sudo apt-get update
+
+# Install necessary dependencies
+sudo apt-get install -y ca-certificates curl
+
+# Create directory for Docker GPG key
+sudo install -m 0755 -d /etc/apt/keyrings
+
+# Download Docker's GPG key
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+
+# Ensure proper permissions for the key
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+# Add Docker repository to Apt sources
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu \
+$(. /etc/os-release && echo "$VERSION_CODENAME") stable" | \
+sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+# Update package manager repositories
+sudo apt-get update
+
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+>>>>>>>>>
+sudo chmod +x docker.sh
+./docker.sh
+
+docker --version
+Try to pull some default image ----> docker pull hello-world ----> If you are unable to pull the image, execute the below command to provide necessary permissions ----> 
+sudo chmod 666 /var/run/docker.sock ----> docker pull hello-world ----> You will be able to pull the image
+docker rmi hello-world
+
+Make sure to Login to DockerHub account in browser
+Goto MobaXTerm Terminal ---> Login to DockerHub ---> 
+docker login -u koti0120 ---> Click Enter ---> Enter the password of DockerHub 
+
+============================
+step:2.3 install trivy (trivy is a file system scanning tool)
+===============================
+create a file trivy.sh
+#!/bin/bash
+sudo apt-get install wget apt-transport-https gnupg
+wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
+echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee -a /etc/apt/sources.list.d/trivy.list
+sudo apt-get update
+sudo apt-get install trivy
+>>>>>>>>>>>>>>>>>>
+sudo chmod +x trivy.sh ----> ./trivy.sh ----> trivy --version
+
+=====================
+2.4 SonarQube Setup
+=============================
+Connect to the Jenkins Server
+docker run -d --name sonar -p 9000:9000 sonarqube:lts-community 
+# lts means latest image
+docker images
+docker ps
+
+Access SonarQube, after opening port 9000
+Default username and Password: admin
+Set new password
+
+===================
+Creation of IAM user (To create EKS Cluster, its not recommended to create using Root Account)
+==========================
+go to IAM user --> create eks-koti-user-->provide access console--> i want create IAM--> choose custom password -->uncheck user must create icon
+don't attatch any policies
+
+Attach policies to the user 
+ AmazonEC2FullAccess, AmazonEKS_CNI_Policy, AmazonEKSClusterPolicy, AmazonEKSWorkerNodePolicy, AWSCloudFormationFullAccess, IAMFullAccess
+
+Attach the below inline policy also for the same user
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Sid": "VisualEditor0",
+            "Effect": "Allow",
+            "Action": "eks:*",
+            "Resource": "*"
+        }
+    ]
+}
+
+we give policy name: eks-inline-policy
+
+Create Access Keys for the user created
+With this we have created the IAM User with appropriate permissions to create the EKS Cluster
+
+=============================
+Creation of EKS Cluster 
+=============================
+
+Install AWS CLI (to interact with AWS Account)
+
+create a file aws.sh
+curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+sudo apt install unzip
+unzip awscliv2.zip
+sudo ./aws/install
+>>>>>>>>>>>>>>
+sudo chmod +x aws.sh
+./aws.sh
+aws --version
+aws configure
+region: us-east-1
+output format: json
+
+==============================
+Install KubeCTL (to interact with K8S)
+=================================
+vi kubectl.sh
+
+curl -o kubectl https://amazon-eks.s3.us-west-2.amazonaws.com/1.19.6/2021-01-05/bin/linux/amd64/kubectl
+chmod +x ./kubectl
+sudo mv ./kubectl /usr/local/bin
+kubectl version --short --client
+
+>>>>>>>>>>>
+sudo chmod +x kebectl.sh
+./kubectl.sh
+
+=========================
+Install EKS CTL (used to create EKS Cluster) 
+==========================
+vi eksctl.sh
+curl --silent --location "https://github.com/weaveworks/eksctl/releases/latest/download/eksctl_$(uname -s)_amd64.tar.gz" | tar xz -C /tmp
+sudo mv /tmp/eksctl /usr/local/bin
+eksctl version
+
+>>>>>>>>>>
+sudo chmod +x eksctl.sh
+./eksctl.sh
+
+============================
+Create EKS Cluster
+============================
+
+Execute the below commands as separate set
+(a)
+eksctl create cluster --name=koti-eks \
+                      --region=us-east-1 \
+                      --zones=us-east-1a,us-east-1b \
+                      --version=1.30 \
+                      --without-nodegroup
+
+It will take 5-10 minutes to create the cluster
+Goto EKS Console and verify the cluster.
+
+in the mean time..
+************************************
+Step : Access Jenkins Dashboard
+************************************
+Setup the Jenkins
+
+3.1. Plugins installation
+Install below plugins;
+Pipeline stage view,Eclipse Temurin Installer, SonarQube scanner, NodeJS, Docker, Docker Commons, Docker Pipeline, Docker API, docker-build-step, OWASP dependency check, Email Extension Template, Kubernetes, Kubernetes CLI, Kubernetes Client API, Kubernetes Credentials,Kubernetes Credentials provider, Config File Provider, Prometheus metrics
+
+ go to sonarqube dashboard -->adminastartion -->users
+SonarQube Token Creation
+Configure the SonarQube server;
+Token: squ_69eb05b41575c699579c6ced901eaafae66d63a2
+
+Creation of Credentials:
+after that goto manage jenkis-->>securit-->credentials -->global -->new-->select secret text-->id:sonar-token-->description-sonar-token
+new-->username with pw-->we config dockerhub credentials
+
+sonarqube webhooks:
+go to sonarqube dashboard -->adminastartion-->under configuration-->webhook option-->create-->Name: jenkins,url:jenkinsurl:8080/sonarqube-webhook/
+
+
+Tools Configuration:
+manage jenkins-->tools-->click on jdk name:jdk17-->enable install automatically-->select install from adoptium.net-->version:jdk-17.08.1+1
+click sonar scanner-->name:sonar-scanner-->version:7.0.1.4817
+click add node js-->node23
+
+click on dependency check-->name:DP-check-->enable install automatically-->select github.com-->version:12.02
+click add docker-->name:docker-->enable automatically>>select docker.com-->varsion:latest
+
+click on apply and save
+click on manage jenkins-->system-->sonar qube servers-->add sonar qube-->Name:sonar-server,url:sonarurl:9000-->click on sonar authentication-->select sonar-token and then save
+
+email notification configuration:
+goto email-->click manage google account-->click on security-->enable 2 step verification-->in search bar enter app passwords-->app name:jenkins
+
+goto manage jenkins-->credentials-->system-->click global cred-->kind:username with pw,name:mailid,pw:secret text that we are generating,id-email-creds
+
+goto manage jenkins-->system-->E-mail notification-->smtp server: smtp.gmail.com,port:465, click on creds select email-creds-->enable ssl,oauth-->default content type:html-->email notification-->smtp server: smtp.gmail.com-->click advanced -->enable smtp auth-->username:koti0120@gmail.com,pw:give we generate pw-->enable use ssl-->smtp port:465-->reply to address:koti0120@gmail.com-->click test email configuration
+search default triggers-->enable always , success,failure any
+
+click on apply and save
+
+System Configuration in Jenkins
+
+===========================
+sudo apt install npm
+
+============================
+
+***************************************************
+
+(b)
+eksctl utils associate-iam-oidc-provider \
+    --region us-east-1 \
+    --cluster koti-eks \
+    --approve
+
+The above command is crucial when setting up an EKS cluster because it enables IAM roles for service accounts (IRSA)
+Amazon EKS uses OpenID Connect (OIDC) to authenticate Kubernetes service accounts with IAM roles.
+Associating the IAM OIDC provider allows Kubernetes workloads (Pods) running in the cluster to assume IAM roles securely.
+Without this, Pods in EKS clusters would require node-level IAM roles, which grant permissions to all Pods on a node.
+Without this, these services will not be able to access AWS resources securely.
+
+(c)
+Before executing the below command, in the 'ssh-public-key' keep the  '<PEM FILE NAME>' (dont give .pem. Just give the pem file name) which was used to create Jenkins Server
+
+eksctl create nodegroup --cluster=koti-eks \
+                       --region=us-east-1 \
+                       --name=node2 \
+                       --node-type=t3.medium \
+                       --nodes=3 \
+                       --nodes-min=2 \
+                       --nodes-max=4 \
+                       --node-volume-size=20 \
+                       --ssh-access \
+                       --ssh-public-key=Koti \
+                       --managed \
+                       --asg-access \
+                       --external-dns-access \
+                       --full-ecr-access \
+                       --appmesh-access \
+                       --alb-ingress-access
+
+It will take 5-10 minutes 
+
+(d) For internal communication b/w control plane and worker nodes, open 'all traffic' in the security group of EKS Cluster
+
+
+
+************************************
+Step 5: Create Pipeline Job
+************************************
+Before pasting the pipeline script, do the following changes in the script
+1. In the stage 'Tag and Push to DockerHub', give your docker-hub username. Similar thing you should do in 'Deploy to container' stage.
+2. In post actions stage in pipeline, make sure to give the email id you have configured in jenkins.
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+BMS - Script (Without K8S Stage)
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+pipeline {
+    agent any
+    tools {
+        jdk 'jdk17'
+        nodejs 'node23'
+    }
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+    }
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+        stage('Checkout from Git') {
+            steps {
+                git branch: 'main', url: 'https://github.com/koti0120/Book-My-Show.git'
+                sh 'ls -la'  // Verify files after checkout
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' 
+                    $SCANNER_HOME/bin/sonar-scanner -Dsonar.projectName=BMS \
+                    -Dsonar.projectKey=BMS 
+                    '''
+                }
+            }
+        }
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token'
+                }
+            }
+        }
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                cd bookmyshow-app
+                ls -la  # Verify package.json exists
+                if [ -f package.json ]; then
+                    rm -rf node_modules package-lock.json  # Remove old dependencies
+                    npm install  # Install fresh dependencies
+                else
+                    echo "Error: package.json not found in bookmyshow-app!"
+                    exit 1
+                fi
+                '''
+            }
+        }
+        stage('Trivy FS Scan') {
+            steps {
+                sh 'trivy fs . > trivyfs.txt'
+            }
+        }
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh ''' 
+                        echo "Building Docker image..."
+                        docker build --no-cache -t koti0120/bms:latest -f bookmyshow-app/Dockerfile bookmyshow-app
+
+                        echo "Pushing Docker image to registry..."
+                        docker push koti0120/bms:latest
+                        '''
+                    }
+                }
+            }
+        }
+        stage('Deploy to Container') {
+            steps {
+                sh ''' 
+                echo "Stopping and removing old container..."
+                docker stop bms || true
+                docker rm bms || true
+
+                echo "Running new container on port 3000..."
+                docker run -d --restart=always --name bms -p 3000:3000 koti/bms:latest
+
+                echo "Checking running containers..."
+                docker ps -a
+
+                echo "Fetching logs..."
+                sleep 5  # Give time for the app to start
+                docker logs bms
+                '''
+            }
+        }
+    }
+    post {
+        always {
+            emailext attachLog: true,
+                subject: "'${currentBuild.result}'",
+                body: "Project: ${env.JOB_NAME}<br/>" +
+                      "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                      "URL: ${env.BUILD_URL}<br/>",
+                to: 'koti0120@gmail.com',
+                attachmentsPattern: 'trivyfs.txt,trivyimage.txt'
+        }
+    }
+}
+
+Access the BMS App using Public IP of BMS-Server
+
+****************************************************************************************************************************
+											PART II: K8S Deployment & Monitoring
+****************************************************************************************************************************
+Before executing the K8S Stage pipeline;
+
+To know Jenkins is running on which user;
+ps aux | grep jenkins
+
+Look for the user in the output. For example:
+jenkins   1234  0.0  0.1 123456 7890 ?        Ssl  12:34   0:00 /usr/bin/java -jar /usr/share/jenkins/jenkins.war
+In this case, Jenkins is running as the jenkins user.
+
+Switch to the jenkins user
+sudo -su jenkins
+pwd ---- /home/ubuntu
+whoami ---- jenkins
+
+Configure AWS credentials:
+aws configure ---> Configure with access and secret access keys
+This will create the AWS credentials file at "/var/lib/jenkins/.aws/credentials"
+
+Verify the credentials
+aws sts get-caller-identity
+If the credentials are valid, you should see output like this:
+{
+    "UserId": "EXAMPLEUSERID",
+    "Account": "123456789012",
+    "Arn": "arn:aws:iam::123456789012:user/example-user"
+}
+
+Comeout of the Jenkins user to Restart Jenkins
+exit
+sudo systemctl restart jenkins
+
+Switch to Jenkins user
+sudo -su jenkins
+aws eks update-kubeconfig --name koti-eks --region us-east-1
+
+
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+BMS - Script (With K8S Stage) 
+&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&&
+pipeline {
+    agent any
+
+    tools {
+        jdk 'jdk17'
+        nodejs 'node23'
+    }
+
+    environment {
+        SCANNER_HOME = tool 'sonar-scanner'
+        DOCKER_IMAGE = 'koti0120/bms:latest'
+        EKS_CLUSTER_NAME = 'koti-eks'
+        AWS_REGION = 'ap-northeast-1'
+    }
+
+    stages {
+        stage('Clean Workspace') {
+            steps {
+                cleanWs()
+            }
+        }
+
+        stage('Checkout from Git') {
+            steps {
+                git branch: 'main', url: 'https://github.com/koti0120/Book-My-Show.git'
+                sh 'ls -la'  // Verify files after checkout
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            steps {
+                withSonarQubeEnv('sonar-server') {
+                    sh ''' 
+                    $SCANNER_HOME/bin/sonar-scanner \
+                        -Dsonar.projectName=BMS \
+                        -Dsonar.projectKey=BMS
+                    '''
+                }
+            }
+        }
+
+        stage('Quality Gate') {
+            steps {
+                script {
+                    waitForQualityGate abortPipeline: false, credentialsId: 'Sonar-token'
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh '''
+                cd bookmyshow-app
+                ls -la  # Verify package.json exists
+                if [ -f package.json ]; then
+                    rm -rf node_modules package-lock.json  # Remove old dependencies
+                    npm install  # Install fresh dependencies
+                else
+                    echo "Error: package.json not found in bookmyshow-app!"
+                    exit 1
+                fi
+                '''
+            }
+        }
+
+        stage('Trivy FS Scan') {
+            steps {
+                sh 'trivy fs . > trivyfs.txt'
+            }
+        }
+
+        stage('Docker Build & Push') {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'docker', toolName: 'docker') {
+                        sh ''' 
+                        echo "Building Docker image..."
+                        docker build --no-cache -t $DOCKER_IMAGE -f bookmyshow-app/Dockerfile bookmyshow-app
+
+                        echo "Pushing Docker image to Docker Hub..."
+                        docker push $DOCKER_IMAGE
+                        '''
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to EKS Cluster') {
+            steps {
+                script {
+                    sh '''
+                    echo "Verifying AWS credentials..."
+                    aws sts get-caller-identity
+
+                    echo "Configuring kubectl for EKS cluster..."
+                    aws eks update-kubeconfig --name $EKS_CLUSTER_NAME --region $AWS_REGION
+
+                    echo "Verifying kubeconfig..."
+                    kubectl config view
+
+                    echo "Deploying application to EKS..."
+                    kubectl apply -f deployment.yml
+                    kubectl apply -f service.yml
+
+                    echo "Verifying deployment..."
+                    kubectl get pods
+                    kubectl get svc
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            emailext attachLog: true,
+                subject: "'${currentBuild.result}'",
+                body: "Project: ${env.JOB_NAME}<br/>" +
+                      "Build Number: ${env.BUILD_NUMBER}<br/>" +
+                      "URL: ${env.BUILD_URL}<br/>",
+                to: 'koti0120@gmail.com',
+                attachmentsPattern: 'trivyfs.txt'
+        }
+    }
+}
+
+
+
+************************************
+Step 6: Monitoring the application
+************************************
+Launch Ubuntu VM, 22.04, t2.medium, 
+Name the VM as Monitoring Server
+
